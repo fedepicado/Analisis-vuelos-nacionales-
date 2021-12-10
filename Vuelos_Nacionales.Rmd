@@ -1,0 +1,773 @@
+---
+title: "**Trabajo Práctico**"
+author: "*Ayelén Dinkel, Fiamma Antonella Lugo Gutierrez, Federico Picado*"
+date: "2 de noviembre de 2021"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    theme: lumen
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+subtitle: Laboratorio de Datos
+geometry: margin=1.5cm
+options: width = 150
+fontsize: 18p
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning= FALSE, message=FALSE)
+
+library(tidyverse)
+require(geosphere)
+library(lubridate)
+library(ggthemes)
+library(pander)
+library(leaflet)
+library(patchwork)
+
+rm(list=ls())
+```
+
+# Introducción
+
+El siguiente trabajo práctico buscara representar e interpretar como fueron los aterrizajes y despegues aereos realizados en Argentina de Enero a Septiembre del año 2021. Los datos pueden encontrarse en https://datos.gob.ar/dataset/transporte-aterrizajes-despegues-procesados-por-administracion-nacional-aviacion-civil-anac
+
+Con el objetivo de poder analizar los datos, fue necesario llevar acabo una limpieza y reorganización de los mismos ya que el dataset original no contaba con con variables necesarias(coordenadas, distancia, tiempo, etc). Para lograr esto fue dado por los docentes de la materia otro dataset con parte de la información necesaria y a partir de ahí comenzamos nuestro análisis.
+
+
+# Primera parte
+```{r}
+#Datos para el tp
+
+setwd("~/Escritorio/Facultad/Labo de Datos/TP")
+datos2021 = read.csv2("202109-informe-ministerio.csv")
+aeropuertos = read.csv("aeropuertosnuevos.csv")
+
+```
+
+
+```{r}
+#Limpiamos la tabla de aeropuertos
+
+datos_aeropuertos = aeropuertos %>% select(c("cpr", "nam", "fna" , "ana", "x", "y"))
+
+datos_aeropuertos[datos_aeropuertos == "NeuquÃ©n"] = "Neuquen"
+datos_aeropuertos[datos_aeropuertos == "RÃ­o Negro"] = "Rio Negro"
+datos_aeropuertos[datos_aeropuertos == "RÃ­o Grande"] = "Rio Grande"
+datos_aeropuertos[datos_aeropuertos == "San MartÃ­n de los Andes"] = "San Martin de los Andes"
+datos_aeropuertos[datos_aeropuertos == "Entre RÃ­os"] = "Entre Rios"
+datos_aeropuertos[datos_aeropuertos == "ParanÃḂ"] = "Parana"
+datos_aeropuertos[datos_aeropuertos == "IguazÃẃ"] = "Iguazu"
+datos_aeropuertos[datos_aeropuertos == "BahÃ­a Blanca"] = "Bahia Blanca"
+datos_aeropuertos[datos_aeropuertos == "CÃġrdoba"] = "Cordoba"
+datos_aeropuertos[datos_aeropuertos == "RÃ­o Cuarto"] = "Rio Cuarto"
+datos_aeropuertos[datos_aeropuertos == "RÃ­o Hondo"] = "Rio Hondo"
+	
+datos_aeropuertos = datos_aeropuertos %>%
+  rename(Provincia = cpr) %>% 
+  rename(Ciudad = nam) %>% 
+  rename(Nombre.Aeropuerto = fna) %>% 
+  rename(Longitud = x) %>% 
+  rename(Latitud = y) 
+
+
+```
+
+
+
+```{r}
+#Ordenamos la tabla
+
+datos= datos2021 %>% 
+  mutate(Origen=Aeropuerto) %>% 
+  mutate(Destino=Aeropuerto) %>%
+  mutate(Origen=ifelse(Tipo.de.Movimiento=="Despegue",Aeropuerto,Origen)) %>% 
+  mutate(Destino=ifelse(Tipo.de.Movimiento=="Despegue",Origen...Destino,Destino)) %>%
+  mutate(Destino=ifelse(Tipo.de.Movimiento=="Aterrizaje",Aeropuerto,Destino)) %>% 
+  mutate(Origen=ifelse(Tipo.de.Movimiento=="Aterrizaje",Origen...Destino,Origen))
+  
+datos = datos %>%  filter(Clasificación.Vuelo == "Dom") %>% select(!"Calidad.dato") %>% rename(Clase.de.vuelo = Clase.de.Vuelo..todos.los.vuelos.) 
+
+```
+
+
+```{r}
+#Pegamos las tablas
+
+datos_aeropuertos = datos_aeropuertos %>% rename(Origen = ana)
+
+datos= inner_join(datos, datos_aeropuertos, by= "Origen")
+
+datos = datos %>% rename(Ciudad.origen = Ciudad) %>% rename(Provincia.origen = Provincia) %>% rename(Latitud.origen = Latitud)  %>% rename(Longitud.origen = Longitud)
+
+datos_aeropuertos = datos_aeropuertos %>% rename(Destino = Origen)
+
+datos= inner_join(datos, datos_aeropuertos, by= "Destino")
+
+datos = datos %>% rename(Ciudad.destino = Ciudad) %>% rename(Provincia.destino = Provincia) %>% rename(Latitud.destino = Latitud)  %>% rename(Longitud.destino = Longitud)
+
+datos$Ciudad.origen[datos$Origen == "PAL"] = "El Palomar"
+datos$Ciudad.destino[datos$Destino == "PAL"] = "El Palomar"
+
+datos$Ciudad.destino[datos$Provincia.destino=="Capital Federa"] = "Capital Federal"
+datos$Ciudad.origen[datos$Provincia.origen=="Capital Federa"] = "Capital Federal"
+
+datos$Provincia.destino=str_to_title(datos$Provincia.destino)
+datos$Provincia.origen=str_to_title(datos$Provincia.origen)
+
+
+```
+
+
+```{r}
+#Obtenemos los datos necesarios para calcular la velocidad de cada vuelo
+
+datos_velocidad = datos %>%  select(c("Fecha", "Hora.UTC", "Clase.de.vuelo","Tipo.de.Movimiento", "Aeronave", "Ciudad.origen", "Ciudad.destino","Provincia.origen", "Provincia.destino", "Latitud.origen","Longitud.origen" , "Latitud.destino","Longitud.destino"))
+
+datos_velocidad = datos_velocidad[order(datos_velocidad$Fecha, datos_velocidad$Ciudad.origen, datos_velocidad$Ciudad.destino),] 
+
+datos_velocidad = pivot_wider(datos_velocidad,names_from = "Tipo.de.Movimiento", values_from = "Hora.UTC")
+
+datos_velocidad = drop_na(datos_velocidad, Aterrizaje)
+datos_velocidad = drop_na(datos_velocidad, Despegue)
+
+Despegue_limpio = c()
+Aterrizaje_limpio = c()
+
+#En este for limpiamos las celdas donde habia mas de un valor. Nos quedamos solo con uno de esos viajes y vimos que respete el tema del horario de despegue y aterrizaje
+
+for (i in 1: nrow(datos_velocidad)){
+  d = datos_velocidad$Despegue[i]
+  a = datos_velocidad$Aterrizaje[i]
+  Listo = FALSE
+  for (j in 1:length(a[[1]])) {
+     if((d[[1]][1] < a[[1]][j]) & !Listo){
+       Despegue_limpio = c(Despegue_limpio, d[[1]][1])
+       Aterrizaje_limpio = c(Aterrizaje_limpio, a[[1]][j])
+       Listo = TRUE
+     }
+  }
+  Listo
+  if(!Listo){
+    Despegue_limpio = c(Despegue_limpio, d[[1]][1])
+    Aterrizaje_limpio = c(Aterrizaje_limpio, "algo raro")  #identificamos si habia datos erroneos
+  }
+}
+ 
+datos_velocidad = datos_velocidad %>% mutate(Despegue.ok = Despegue_limpio) %>% mutate(Aterrizaje.ok = Aterrizaje_limpio)
+
+datos_velocidad = datos_velocidad %>% select(!c("Despegue", "Aterrizaje")) %>% filter(Aterrizaje.ok != "algo raro")
+
+Distancia = c()
+
+for (i in 1:nrow(datos_velocidad)) {
+  distancia = distHaversine(c(datos_velocidad$Latitud.origen[i], datos_velocidad$Longitud.origen[i]), c(datos_velocidad$Latitud.destino[i],datos_velocidad$Longitud.destino[i]))
+  Distancia = c(Distancia, distancia)
+}
+
+datos_velocidad = datos_velocidad %>% 
+  mutate(Aterrizaje.tiempo = ymd_hms(as_datetime(hm(Aterrizaje.ok)))) %>% 
+  mutate(Despegue.tiempo = ymd_hms(as_datetime(hm(Despegue.ok)))) %>% 
+  mutate(Tiempo = difftime(Aterrizaje.tiempo,Despegue.tiempo)) %>% 
+  mutate(Distancia.m = Distancia) %>% 
+  filter(Distancia.m != 0)
+
+datos_velocidad$Tiempo = gsub('[^0-9]', '', datos_velocidad$Tiempo)  
+datos_velocidad$Tiempo = as.numeric(datos_velocidad$Tiempo)
+datos_velocidad$Tiempo = datos_velocidad$Tiempo /60  #pasamos de minutos a horas 
+
+datos_velocidad$Distancia.km = datos_velocidad$Distancia.m /1000 #pasamos de metros a kilometros
+  
+datos_velocidad = datos_velocidad %>%  mutate(Velocidad = Distancia.km / Tiempo) #velocidad en km/h
+
+
+#Agregamos columna con los meses
+
+meses=c()
+
+for (mes in datos_velocidad$Fecha) {
+  mes= str_sub(mes,start = 5,end = 5)
+  meses=c(meses,mes)
+}
+
+datos_velocidad$Mes=meses
+
+datos_velocidad= datos_velocidad %>% 
+  mutate(Mes.nombre = case_when(Mes == "1" ~"Enero" ,
+                                Mes == "2" ~"Febrero" ,
+                                Mes == "3" ~"Marzo",
+                                Mes == "4" ~"Abril" ,
+                                Mes == "5" ~"Mayo" ,
+                                Mes == "6" ~"Junio" ,
+                                Mes == "7" ~"Julio" ,
+                                Mes == "8" ~"Agosto" ,
+                                Mes == "9" ~"Septiembre"))
+
+
+
+```
+
+# Segunda parte
+
+Con los datos ordenados, empezamos a hacernos preguntas sobre la relación de las variables. Los temas que nos interesaron fueron la velocidad de los vuelos, los destinos más frecuentes y la relación Aerolíneas - pasajeros. 
+
+
+### Velocidad
+
+Como punto de partida realizamos un histograma de velocidad para todos los vuelos y así obtuvimos su distribución.
+
+```{r  fig.align="center"}
+datos_velocidad %>% 
+   filter(Velocidad > 500 & Velocidad < 900 ) %>% 
+  ggplot(aes(Velocidad))+
+  geom_histogram(color="black", fill="lightblue",binwidth = 50,fill = "black", alpha=.5)+
+  geom_vline(aes(xintercept=mean(Velocidad)))+
+  xlim(c(400,1000))+
+  labs(x = "Velocidad", y = "Frecuencia",title = "Velocidad Promedio")+
+  theme_bw()+
+  theme(axis.title.x = element_text(color = "black", size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+```
+
+Viendo el histograma de las velocidades podemos observar que hay dos modas, entonces nos preguntamos si esto se debe al tipo de aeronave.
+Luego de realizar los histogramas para cada aeronave, vimos que para la aeronave *EMB-ERJ190100IGW* se pierde la distribución bimodal mientras que las otras 2 aeronaves más utilizadas la siguen manteniendo.
+Como estos resultados no respondieron nuestras preguntas, decidimos analizar otros factores que modifiquen la velocidad de los diferentes vuelos.
+Teniendo en cuenta esto nos preguntamos: ¿Será que a mayor distancia mayor es la velocidad? 
+Entonces realizamos un scatter_plot de Velocidad en función de la distancia.
+
+```{r fig.align="center", include=FALSE}
+
+datos_velocidad %>% 
+  group_by(Aeronave) %>% 
+  summarise(ae_cant=n()) %>% 
+  arrange(desc(ae_cant)) %>% 
+  top_n(3,ae_cant) 
+
+vuelo_aero_1= datos_velocidad %>% 
+  filter(Aeronave=="EMB-ERJ190100IGW")
+
+vuelo_aero_2= datos_velocidad %>% 
+  filter(Aeronave=="AIB-A320-232") 
+
+vuelo_aero_3= datos_velocidad %>% 
+  filter( Aeronave=="BO-737-800") 
+
+vuelo_aero_1%>%
+  ggplot(aes(Velocidad))+
+  geom_histogram(color="black", fill="lightblue",binwidth = 40,fill = "black", alpha=.5)+
+  geom_vline(aes(xintercept=mean(Velocidad)))+
+  xlim(c(400,1000))+
+  labs(x = "Velocidad", y = "Frecuencia",title = "Velocidad aeronave EMB-ERJ190100IGW")+
+  theme_bw()+
+  theme(axis.title.x = element_text(color = "black", size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+
+vuelo_aero_2%>%
+  ggplot(aes(Velocidad))+
+  geom_histogram(color="black", fill="lightblue",binwidth = 40,fill = "black", alpha=.5)+
+  geom_vline(aes(xintercept=mean(Velocidad)))+
+  xlim(c(400,1000))+
+  labs(x = "Velocidad", y = "Frecuencia",title = "Velocidad aeronave AIB-A320-232")+
+  theme_bw()+
+  theme(axis.title.x = element_text(color = "black", size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+
+vuelo_aero_3%>%
+  ggplot(aes(Velocidad))+
+  geom_histogram(color="black", fill="lightblue",binwidth = 40,fill = "black", alpha=.5)+
+  geom_vline(aes(xintercept=mean(Velocidad)))+
+  xlim(c(400,1000))+
+  labs(x = "Velocidad", y = "Frecuencia",title = "Velocidad aeronave BO-737-800")+
+  theme_bw()+
+  theme(axis.title.x = element_text(color = "black", size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+
+
+```
+
+
+
+
+```{r fig.align="center"}
+naves = datos_velocidad %>% 
+  group_by(Aeronave) %>% 
+  summarise(ae_cant=n()) %>% 
+  arrange(desc(ae_cant)) %>% 
+  top_n(3,ae_cant) 
+
+vuelo_aero_3= datos_velocidad %>% 
+ filter(Aeronave=="EMB-ERJ190100IGW" | Aeronave=="AIB-A320-232" | Aeronave=="BO-737-800") 
+
+
+vuelo_aero_3 %>% filter(Velocidad < 1000 ) %>% 
+  ggplot(aes(x= Distancia.km, y = Velocidad, color = Aeronave))+
+  geom_point(alpha = .2)+
+  geom_smooth(method = loess)+
+  labs(x = "Distancia", y = "Velocidad",title = "Velocidad Promedio")+
+  theme_bw()+
+  theme(axis.title.x = element_text(color = "black", size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+
+```
+
+Efectivamente vemos que a mayor distancia mayor es la velocidad para las 3 aeronaves. 
+
+¿Habrá algún otro factor que modifique la velocidad de los vuelos? Con la sugerencia de parte de los docentes de analizar que pasa con la velocidad de los vuelos que van de este a oeste y viceversa, nos quedamos con las 3 aeronaves que más vuelos realizaron y observamos 6 origen-destino.
+
+```{r fig.align="center"}   
+vuelo_aero_3 = vuelo_aero_3 %>% 
+  filter(Ciudad.origen == "Capital Federal" | Ciudad.origen == "Cordoba" | Ciudad.origen == "Mendoza" 
+         | Ciudad.origen == "Neuquen" | Ciudad.origen == "San Carlos de Bariloche" | Ciudad.origen == "Tucuman") %>% 
+   filter(Ciudad.destino == "Capital Federal" | Ciudad.destino == "Cordoba" | Ciudad.destino == "Mendoza" 
+         | Ciudad.destino == "Neuquen" | Ciudad.destino == "San Carlos de Bariloche" | Ciudad.destino == "Tucuman")
+
+vuelo_aero_3%>% 
+  ggplot(aes(x= Ciudad.origen, y = Tiempo))+
+  geom_boxplot(outlier.alpha = 0, aes(color = Ciudad.destino))+
+  ylim(c(0.5,2.5))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Tiempo",title = "Tiempo de viaje")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5))+
+  scale_color_brewer(palette = "Set1")
+
+vuelo_aero_3%>% 
+  ggplot(aes(x= Ciudad.origen, y = Velocidad, color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(0, 1250))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Velocidad",title = "Velocidad de vuelo")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5))+
+  scale_color_brewer(palette = "Set1")
+```
+
+Estos gráficos generales nos sirvieron para identificar los vuelos con mayores diferencias en tiempo y velocidad. 
+Para observar mejor estas diferencias, decidimos quedarnos con pares de destinos y graficarlos.
+
+
+```{r fig.align="center"}     
+
+(vuelo_aero_3 %>%  filter( (Ciudad.origen == "Mendoza" & Ciudad.destino == "Capital Federal") | 
+                            (Ciudad.origen == "Capital Federal" & Ciudad.destino == "Mendoza")) %>% 
+  ggplot(aes(x= Ciudad.origen, y = Tiempo , color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(1, 2))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Tiempo",title = "Tiempo de viaje")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5), legend.position = "none")+
+  scale_color_brewer(palette = "Set1")) +
+
+(vuelo_aero_3%>% filter( (Ciudad.origen == "Mendoza" & Ciudad.destino == "Capital Federal") | 
+                            (Ciudad.origen == "Capital Federal" & Ciudad.destino == "Mendoza")) %>% 
+  ggplot(aes(x= Ciudad.origen, y = Velocidad, color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(400, 1250))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Velocidad",title = "Velocidad de vuelo")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5))+
+  scale_color_brewer(palette = "Set1")  )
+
+
+
+(vuelo_aero_3 %>%  filter( (Ciudad.origen == "San Carlos de Bariloche" & Ciudad.destino == "Capital Federal") | 
+                            (Ciudad.origen == "Capital Federal" & Ciudad.destino == "San Carlos de Bariloche")) %>% 
+  ggplot(aes(x= Ciudad.origen, y = Tiempo , color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(1.5, 2.5))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Tiempo",title = "Tiempo de viaje")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5), legend.position = "none")+
+  scale_color_brewer(palette = "Set1"))+
+
+(vuelo_aero_3 %>%  filter( (Ciudad.origen == "San Carlos de Bariloche" & Ciudad.destino == "Capital Federal") | 
+                            (Ciudad.origen == "Capital Federal" & Ciudad.destino == "San Carlos de Bariloche")) %>% 
+   ggplot(aes(x= Ciudad.origen, y = Velocidad, color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(600, 900))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Velocidad",title = "Velocidad de vuelo")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5) )+
+  scale_color_brewer(palette = "Set1"))
+
+
+(vuelo_aero_3 %>%  filter( (Ciudad.origen == "Neuquen" & Ciudad.destino == "Cordoba") | 
+                            (Ciudad.origen == "Cordoba" & Ciudad.destino == "Neuquen")) %>% 
+  ggplot(aes(x= Ciudad.origen, y = Tiempo , color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(1, 2))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Tiempo",title = "Tiempo de viaje")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5), legend.position = "none")+
+  scale_color_brewer(palette = "Set1"))+
+
+
+(vuelo_aero_3 %>%  filter( (Ciudad.origen == "Neuquen" & Ciudad.destino == "Cordoba") | 
+                            (Ciudad.origen == "Cordoba" & Ciudad.destino == "Neuquen")) %>% 
+   ggplot(aes(x= Ciudad.origen, y = Velocidad, color = Ciudad.destino))+
+  geom_boxplot(outlier.alpha = 0)+
+  ylim(c(300, 500))+
+  theme_grey()+
+  labs(x = "Ciudad origen", y = "Velocidad",title = "Velocidad de vuelo")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5))+
+  scale_color_brewer(palette = "Set1") ) 
+
+```
+
+Viendo con mayor detalle los boxplot podemos notar que los vuelos que se realizan de oeste a este, como por ejemplo Capital Federal - Mendoza y Capital Federal - San Carlos de Bariloche, el tiempo de vuelo es mayor y la velocidad es menor comparado con su regreso. En el caso Córdoba - Neuquén que es un viaje con mayor componente norte - sur que de oeste - este, el tiempo y la velocidad de los vuelos son parecidos en ambos sentidos.
+Esto podría deberse a la corriente en chorro, que es un núcleo de fuertes vientos de aproximadamente 8-12 km sobre la superficie de la Tierra, que sopla de oeste a este. Lo cual explicaría que los viajes de este a oeste les tome más tiempo.
+
+
+### Destinos más frecuentes
+
+Otro tema que quisimos explorar fue el de los destinos más frecuentes. 
+Las primeras preguntas que nos hicimos fueron:
+
+¿Cuáles son los destinos más frecuentes? ¿Cuántos vuelos aterrizaron en esos aeropuertos durante el 2021?
+También nos preguntamos cuáles eran las ciudades principales que viajaban hacia esos destinos.
+
+```{r}
+
+movimientos = data.frame(table(datos_velocidad$Ciudad.origen))
+movimientos = movimientos %>% rename(Ciudad.destino = Var1) %>%  rename(Can_aterrizajes = Freq)
+
+mas_visitados = datos_velocidad %>% select("Ciudad.destino","Latitud.destino", "Longitud.destino") 
+
+Visitados = inner_join(mas_visitados, movimientos, by = "Ciudad.destino")
+
+Visitados = Visitados[!duplicated(Visitados), ]
+
+Mas_visitados = Visitados[order(Visitados$Can_aterrizajes, decreasing = T),]
+Mas_visitados = Mas_visitados[!duplicated(Mas_visitados),]
+
+mas_transito = Visitados$Can_aterrizajes[prop.table(Visitados$Can_aterrizajes) > 0.05]
+menos_transito = Visitados$Can_aterrizajes[prop.table(Visitados$Can_aterrizajes) < 0.01]
+promedio_transito = Visitados$Can_aterrizajes[prop.table(Visitados$Can_aterrizajes) > 0.01 &
+                              prop.table(Visitados$Can_aterrizajes) < 0.05]
+
+
+#conexiones
+
+ciudades = Visitados$Ciudad.destino[Visitados$Can_aterrizajes > 1000] 
+
+viajan_a_caba = datos_velocidad %>% filter(Ciudad.destino == "Capital Federal")
+viajan_a_caba = viajan_a_caba %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n) %>% mutate(Ciudad.destino = "Capital Federal")
+viajan_a_caba = viajan_a_caba[1:5,]
+
+viajan_a_ezeiza = datos_velocidad %>% filter(Ciudad.destino == "Ezeiza")
+viajan_a_ezeiza = viajan_a_ezeiza %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n)  %>% mutate(Ciudad.destino = "Ezeiza")
+viajan_a_ezeiza = viajan_a_ezeiza[1:5,]
+
+viajan_a_cba = datos_velocidad %>% filter(Ciudad.destino == "Cordoba")
+viajan_a_cba = viajan_a_cba %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n) %>% mutate(Ciudad.destino = "Cordoba")
+viajan_a_cba = viajan_a_cba[1:5,]
+
+viajan_a_brc = datos_velocidad %>% filter(Ciudad.destino == "San Carlos de Bariloche")
+viajan_a_brc = viajan_a_brc %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n) %>% mutate(Ciudad.destino = "San Carlos de Bariloche") 
+viajan_a_brc = viajan_a_brc[1:5,]
+
+viajan_a_sf = datos_velocidad %>% filter(Ciudad.destino == "San Fernando")
+viajan_a_sf = viajan_a_sf %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n) %>% mutate(Ciudad.destino = "San Fernando")
+viajan_a_sf = viajan_a_sf[1:5,]
+
+viajan_a_nqn = datos_velocidad %>% filter(Ciudad.destino == "Neuquen")
+viajan_a_nqn = viajan_a_nqn %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n) %>% mutate(Ciudad.destino = "Neuquen")
+viajan_a_nqn = viajan_a_nqn[1:5,]
+
+viajan_a_mdz = datos_velocidad %>% filter(Ciudad.destino == "Mendoza")
+viajan_a_mdz = viajan_a_mdz %>% group_by(Ciudad.origen) %>% summarise(n=n()) %>% arrange(-n) %>% mutate(Ciudad.destino = "Mendoza")
+viajan_a_mdz = viajan_a_mdz[1:5,]
+
+conexiones = rbind(viajan_a_caba, viajan_a_cba, viajan_a_brc, viajan_a_ezeiza, viajan_a_nqn, viajan_a_sf, viajan_a_mdz)
+Mas_visitados2 = Mas_visitados %>% select(!"Can_aterrizajes")
+
+conexiones = inner_join(conexiones, Mas_visitados2, by = "Ciudad.destino")
+
+Mas_visitados2 = Mas_visitados2 %>% rename(Latitud.origen = Latitud.destino) %>% rename(Longitud.origen = Longitud.destino) %>% rename(Ciudad.origen = Ciudad.destino)
+
+conexiones = inner_join(conexiones, Mas_visitados2, by = "Ciudad.origen")
+
+Latitudes = c()
+Longitudes = c()
+
+for (i in 1:nrow(conexiones)) {
+  lan_o = conexiones$Latitud.origen[i]
+  long_o = conexiones$Longitud.origen[i]
+  lan_d = conexiones$Latitud.destino[i]
+  long_d = conexiones$Longitud.destino[i]
+  Latitudes = c(Latitudes, lan_o, lan_d,NA)
+  Longitudes = c(Longitudes , long_o, long_d, NA)
+  
+}
+
+matriz = cbind(Latitudes, Longitudes)
+
+
+
+#Mapa
+
+leaflet() %>% addProviderTiles(providers$CartoDB.Positron) %>% 
+addCircleMarkers(lng=Visitados$Longitud.destino[Visitados$Can_aterrizajes > 1000], 
+                 lat= Visitados$Latitud.destino[Visitados$Can_aterrizajes > 1000],fillOpacity=0.75,radius=5,color="red",stroke = FALSE, label=as.character(round(Visitados$Can_aterrizajes[Visitados$Can_aterrizajes > 1000]))) %>% 
+addCircleMarkers(lng=Visitados$Longitud.destino[Visitados$Can_aterrizajes < 200], 
+                 lat= Visitados$Latitud.destino[Visitados$Can_aterrizajes < 200],fillOpacity=0.75,radius=3,color="green",stroke = FALSE, label=as.character(round(Visitados$Can_aterrizajes[Visitados$Can_aterrizajes < 200])))  %>% 
+addCircleMarkers(lng=Visitados$Longitud.destino[Visitados$Can_aterrizajes >= 200 & Visitados$Can_aterrizajes <= 1000], 
+                 lat= Visitados$Latitud.destino[Visitados$Can_aterrizajes > 200 
+                                                 & Visitados$Can_aterrizajes < 1000],fillOpacity=0.75,radius=4,color="purple", stroke = FALSE, label=as.character(round(Visitados$Can_aterrizajes[Visitados$Can_aterrizajes > 200
+                                                  & Visitados$Can_aterrizajes < 1000]))) %>% 
+  addPolylines(lng = matriz[,"Longitudes"], lat = matriz[,"Latitudes"], weight = 1 , color = "black") %>% 
+  addLegend("bottomright", 
+  colors =c("red", "purple", "green"),
+  labels= c("Mas de 1000", "Entre 200 y 1000", "Menos de 200"),
+  title= "Cant de aterrizajes",
+  opacity = 1)
+
+
+
+```
+
+
+En el mapa podemos observar la cantidad de aterrizajes en cada ciudad, las cuales divimos en tres grupos. En cada punto el mapa se puede obtener la información de la cantidad exacta de vuelos que aterrizaron en ese lugar. Al mismo tiempo, el grafo nos brinda las rutas de vuelos más utilizadas.
+ 
+Luego hicimos un gráfico solamente de las ciuadades que tenian más de 1000 aterrizajes para poder comparar en detalle sus diferencias.
+
+```{r fig.align="center"}
+movimientos_2 = data.frame(table(datos_velocidad$Ciudad.origen))
+movimientos_2 = movimientos_2 %>% rename(Ciudad.destino = Var1) %>%  rename(Can_aterrizajes = Freq)
+
+mas_visitados_2 = datos_velocidad %>% select("Ciudad.destino","Ciudad.origen", "Latitud.destino", "Longitud.destino","Mes") 
+
+Visitados_2 = inner_join(mas_visitados_2, movimientos_2, by = "Ciudad.destino")
+
+Visitados_2 = Visitados_2[!duplicated(Visitados_2), ]
+
+Visitados_2 %>% 
+  filter(Can_aterrizajes>1000) %>%
+  ggplot(aes(x=reorder(Ciudad.destino,Can_aterrizajes),y=Can_aterrizajes))+
+   geom_point()+
+   labs(x = "Ciudad destino", y = "Cantidad de Aterrizaje",title = "Aeropuertos con mayor aterrizajes")+
+  theme_bw()+
+   theme_bw()+
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1, size = 15))+
+  theme(axis.title.x = element_text(color = "black", size = 14),
+        axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+```
+
+Se puede apreciar facilmente que las 3 ciudades con más aterrizajes se encuentran en la provincia de Buenos Aires y luego se acorta la diferencia entre las demás provincias.
+
+Por otro lado quisimos observar la cantidad de vuelos que se hicieron por mes.
+
+```{r fig.align="center"}
+
+
+datos_velocidad$Mes.nombre =  factor(datos_velocidad$Mes.nombre, unique(datos_velocidad$Mes.nombre))
+
+datos_velocidad %>% 
+   group_by(Mes.nombre) %>% 
+   summarise(cant_vuelos=n()) %>%
+   ggplot(aes(x=Mes.nombre, y= cant_vuelos))+
+    geom_point()+
+   labs(x = "Meses", y = "Cantidad de Aterrizaje",title = "Cantidad de vuelos por mes")+
+  theme_bw()+
+  theme(axis.title.x = element_text(color = "black", size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))
+```
+
+En el gráfico notamos que los meses Mayo y Junio fueron en los que menos se viajó. Lo cual concuerda con la etapa de aislamiento en la que nos encontrábamos en dichos meses.
+
+Siguiendo el hilo del análisis anterior, realizamos el mismo gráfico dividido en meses pero diferenciando los tres destinos más frecuentes en cada mes.
+
+```{r fig.align="center"}
+datos_velocidad %>% 
+   group_by(Mes.nombre,Ciudad.destino) %>% 
+   summarise(cant_vuelos=n())%>%
+   arrange(desc(cant_vuelos)) %>% 
+   top_n(3,cant_vuelos) %>% 
+   ggplot(aes(x=Mes.nombre, y= cant_vuelos))+
+  geom_jitter(aes( color = Ciudad.destino ), size = 2.5 , height = 12, width = .12 )+
+    #geom_point(aes( color = Ciudad.destino , alpha = Ciudad.destino))+
+   labs(x = "Meses", y = "Cantidad de Aterrizaje",title = "Cantidad de vuelos por mes")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5))+
+  theme(axis.title.x = element_text(color = "black",  size = 14),axis.title.y = element_text(color = "black", size = 14))+
+  theme(plot.title = element_text(size = 14, face = "bold.italic"),
+        plot.caption = element_text(hjust = 0))+
+  scale_color_brewer(palette = "Set1")
+
+
+```
+
+Observamos que en los destino más frecuentes por mes sigue teniendo al menos una ciudad de Bs As en cada mes y por otro lado Bariloche, Córdoba y Mendoza tienen sus meses particulares. Por otro lado la única ciudad que esta entre las más visitadas pero no aparece en el gráfico es Neuquén, si bien es un destino frecuente no tiene un mes particular en el cual es un destino principal.
+
+
+### Aerolíneas y Pasajeros
+
+En la siguiente parte del tp queríamos saber cuales fueron las 10 aerolíneas con más vuelos realizados desde enero a septiembre 2021.
+
+```{r}
+# Nombro un nuevo dataset y me quedo con las columnas que me interesan
+
+datos_pasajeros = datos %>% 
+  group_by(Aerolinea.Nombre) %>%
+  filter(Aerolinea.Nombre != "0") %>% 
+  filter(Tipo.de.Movimiento == "Despegue") %>% 
+  select("Aerolinea.Nombre", "Pasajeros") 
+
+
+# Cambio algunos nombres al ver que en el top 10 se repetia aerolinea por estar escrita de dos formas diferentes
+
+datos_pasajeros$Aerolinea.Nombre[datos_pasajeros$Aerolinea.Nombre == "FUERZA AEREA ARGENTINA (FAA)"] = "FUERZA AEREA ARGENTINA"
+
+# Ranking 10 aerolineas con mas vuelos
+
+Top_10_Aerolineas = sort(table(datos_pasajeros$Aerolinea.Nombre), decreasing = TRUE)
+Top_10_Aerolineas = head(Top_10_Aerolineas, 10)  
+
+
+Top_10_Aerolineas = data.frame(Top_10_Aerolineas)
+
+
+Top_10_Aerolineas = Top_10_Aerolineas %>% 
+  rename(Aerolineas = Var1) %>% 
+  rename(Cant.Vuelos = Freq)
+
+
+# Calculo la cantidad de pasajeros de cada una de las aerolineas del top 10
+
+pasajeros = c()
+
+for (i in 1:nrow(Top_10_Aerolineas)) {
+  cant = 0
+  for(j in 1:nrow(datos_pasajeros)) {
+    if(datos_pasajeros$Aerolinea.Nombre[j] == Top_10_Aerolineas$Aerolineas[i]) {
+      cant = cant + datos_pasajeros$Pasajeros[j]
+    }
+  }
+  pasajeros = c(pasajeros, cant)
+}
+
+
+Top_10_Aerolineas$Cant.Pasajeros = pasajeros
+
+Top_10_Aerolineas$Aerolineas = factor(Top_10_Aerolineas$Aerolineas, Top_10_Aerolineas$Aerolineas)
+```
+
+Nuestra primera pregunta fue : ¿Hay mucha diferencia entre la cantidad de vuelos que realizan?
+
+```{r fig.align="center"}
+# Grafico cantidad de vuelos de las 10 aerolineas mas usadas
+
+
+ggplot(data = Top_10_Aerolineas, 
+       aes(x = Aerolineas, 
+           y = Cant.Vuelos,
+          fill = Aerolineas) ) +
+  geom_col()+
+  theme_minimal() +
+  labs(x = "", 
+       y = "",
+       color = "",
+       title = "Cantidad de vuelos ") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5)) +
+  theme(axis.text.y = element_blank()) +
+  guides(fill="none") +
+  geom_text(aes(label=format(Cant.Vuelos,decimal.mark = ",")), vjust=-.1, size = 3.5)+
+   scale_color_brewer(palette = "Set1")
+```
+
+Del gráfico observamos que es demasiada la diferencia de la cantidad de vuelos entre Aerolíneas Argentinas y las demás.
+
+Vimos si esta diferencia entre la cantidad de vuelos se refleja en la cantidad de pasajeros que cada una de estas aerolíneas transporta.
+```{r fig.align="center"}
+# Grafico cantidad de pasajeros de las 10 aerolineas mas usadas
+
+ ggplot(data = Top_10_Aerolineas, 
+       aes(x = Aerolineas, 
+           y = Cant.Pasajeros,
+          fill = Aerolineas) ) +
+  geom_col()+
+  theme_minimal() +
+  labs(x = "", 
+       y = "",
+       color = "",
+       title = "Cantidad de pasajeros ") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5)) +
+  theme(axis.text.y = element_blank()) +
+  guides(fill="none") +
+  geom_text(aes(label=format(Cant.Pasajeros,decimal.mark = ",")), vjust=-.1, size = 3.5)+
+    scale_color_brewer(palette = "Set1")
+```
+
+Se puede observar que hay una gran diferencia entre la cantidad de pasajeros. Además, cabe notar que el hecho de que las aerolíneas tengan más vuelos realizados que otras, no necesariamente implica que traslade más cantidad de pasajeros.
+
+Por esto, decidimos ver el promedio de pasajeros por vuelo de las 10 aerolíneas.
+```{r fig.align="center"}
+Top_10_Aerolineas = Top_10_Aerolineas %>% 
+  mutate(Pasajeros.Por.Vuelo = Cant.Pasajeros / Cant.Vuelos)
+#reorder(Aerolineas, desc(Pasajeros.Por.Vuelo))
+
+ggplot(data = Top_10_Aerolineas, 
+       aes(x = Aerolineas, 
+           y = Pasajeros.Por.Vuelo,
+          fill = Aerolineas) ) +
+  geom_col()+
+  theme_minimal() +
+  labs(x = "", 
+       y = "",
+       color = "",
+       title = "Promedio de pasajeros por vuelo ") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5)) +
+  theme(axis.text.y = element_blank()) +
+  guides(fill="none") +
+  geom_text(aes(label=format(round(Pasajeros.Por.Vuelo, 2),decimal.mark = ",")), vjust=-.1, size = 3.5)+
+   scale_color_brewer(palette = "Set1")
+```
+
+Se puede observar que hay una gran diferencia en el promedio de pasajeros por vuelo. 
+Del gráfico podemos confirmar que si bien hay aerolíneas que tienen menos vuelos que otras, transportan mayor cantidad de pasajeros. Vemos que es muy notoria la diferencia entre las primeras 3 aerolíneas y las siguientes, por lo que decidimos centrarnos en éstas.
+
+
+```{r fig.align="center"}
+Top_3 = datos_pasajeros %>% filter(Aerolinea.Nombre == "AEROLINEAS ARGENTINAS SA" |
+                                     Aerolinea.Nombre == "JETSMART AIRLINES S.A." | 
+                                     Aerolinea.Nombre == "FB LÍNEAS AÉREAS - FLYBONDI")
+Top_3$Aerolinea.Nombre = factor(Top_3$Aerolinea.Nombre,
+                                c("AEROLINEAS ARGENTINAS SA" , "JETSMART AIRLINES S.A.","FB LÍNEAS AÉREAS - FLYBONDI" ))
+
+Top_3 %>% 
+  ggplot(aes(x= Aerolinea.Nombre, y = Pasajeros, color = Aerolinea.Nombre))+
+  geom_violin(fill = "gray80", size = 1, alpha = .5) +
+  geom_boxplot(outlier.alpha = 0, alpha = 0.4, coef = 0, width = .05) +
+  theme_minimal()+
+  labs(x = "", y = "Pasajeros por vuelo", title = "Promedio de pasajeros")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7.5,lineheight = 0.5))
+  
+
+```
+
+Observamos que efectivamente la cantidad de vuelos de cada aerolínea no es proporcional a la cantidad de pasajeros que transporta.
+En el caso de Aerolíneas Argentinas apreciamos que tiene dos modas, lo cual podría deberse a dos tipos de aeronaves con distintas capacidades. Por otro lado Jetsmart Airlines tiene una distribución uniforme y la aerolínea Flybondi tiene una mediana bien marcada, y pensamos que podría deberse a que es una aerolínea lowcost y los vuelos se realizan con el cupo completo.
+
+# Conclusión 
+
+A lo largo de este trabajo hemos encontrado información de nuestro interés que nos permitió conocer distintos aspectos de los vuelos que se realizaron en la República Argentina desde enero y septiembre de 2021. 
+Relacionado al análisis de velocidad nos parece relevante destacar la diferencia entre los tiempos de vuelo, la cual se ve influenciada por la corriente en chorro demorando más los vuelos de este a oeste. 
+Respecto al segundo tema analizado, destinos más frecuntes, confirmamos que entre los destinos más visitados se encuentran tres ciudades de la pronvincia de Buenos Aires con más de 2000 aterrizajes y el resto de las ciudades que tienen más de 1000 aterrizajes corresponden a grandes ciudades turísticas, como Bariloche y Córdoba. Del grafo en el mapa, podemos concluir que la mayoría de los vuelos se concentran entre estas ciudades nombradas recientemente. 
+Por último, en el análisis sobre las aerolíneas y la cantidad de pasajeros que transportan nos resulta interesante destacar que la aerolínea Flybondi lleva en promedio más pasajeros por vuelo que las aerolíneas de renombre. 
+
+
+
+
+
+
+
